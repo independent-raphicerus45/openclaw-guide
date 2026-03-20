@@ -93,7 +93,7 @@ function Confirm-Action ($prompt) {
 
 function T ($key) {
     $zh = @{
-        title            = '你的 OpenClaw 之旅  Wrapped'
+        title            = 'OpenClaw 使用总结'
         days             = '相伴时光'
         sessions         = '对话次数'
         messages         = '消息总数'
@@ -107,22 +107,20 @@ function T ($key) {
         night_owl        = '夜猫子'
         early_bird       = '早起鸟'
         steady           = '稳定输出型'
-        share_copied     = '分享文本已复制到剪贴板！'
-        share_hint       = '（也可截图分享）'
         confirm_uninstall= '确认卸载 OpenClaw？'
         uninstall_done   = 'OpenClaw 已卸载完成，后会有期！'
         scanning         = '正在扫描本地数据...'
         no_data          = '未找到 OpenClaw 数据：'
         farewell_quote   = '次与 AI 的对话'
         farewell_power   = '你是一位超级用户。'
-        farewell_thanks  = '感谢这段旅程。'
+        farewell_thanks  = ''
         will_remove      = '以下内容将被删除：'
         kept             = '（已保留）'
         skip_dry         = '[预演模式] 未删除任何文件。'
         activity         = '24h 活跃度'
     }
     $en = @{
-        title            = 'Your OpenClaw Journey  Wrapped'
+        title            = 'OpenClaw Usage Summary'
         days             = 'Days Together'
         sessions         = 'Conversations'
         messages         = 'Messages'
@@ -136,15 +134,13 @@ function T ($key) {
         night_owl        = 'Night Owl'
         early_bird       = 'Early Bird'
         steady           = 'Steady Worker'
-        share_copied     = 'Share text copied to clipboard!'
-        share_hint       = '(You can also screenshot to share)'
         confirm_uninstall= 'Proceed with uninstall?'
         uninstall_done   = 'OpenClaw has been uninstalled. Farewell!'
         scanning         = 'Scanning local data...'
         no_data          = 'No OpenClaw data found at'
         farewell_quote   = 'late-night conversations with AI'
         farewell_power   = "You've been a power user."
-        farewell_thanks  = 'Thanks for the journey.'
+        farewell_thanks  = ''
         will_remove      = 'The following will be removed:'
         kept             = '(kept)'
         skip_dry         = '[DRY RUN] No files were deleted.'
@@ -422,9 +418,9 @@ function Estimate-Cost {
     }
 
     if ($script:Stat.InputTokens -gt 0 -or $script:Stat.OutputTokens -gt 0) {
-        $script:Stat.EstCost = '{0:F2}' -f (($script:Stat.InputTokens * 3 + $script:Stat.OutputTokens * 15) / 1000000)
+        $script:Stat.EstCost = '{0:F2}' -f (($script:Stat.InputTokens * 3 + $script:Stat.OutputTokens * 15) / 1000000 * 7)
     } elseif ($script:Stat.TotalTokens -gt 0) {
-        $script:Stat.EstCost = '{0:F2}' -f ($script:Stat.TotalTokens * 8 / 1000000)
+        $script:Stat.EstCost = '{0:F2}' -f ($script:Stat.TotalTokens * 8 / 1000000 * 7)
     }
 }
 
@@ -475,7 +471,7 @@ function Render-Wrapped {
     Print-Stat "${script:CYN}💬${script:RST}" (T 'sessions') "${script:BLD}$($script:Stat.Sessions)${us}${script:RST}"
     Print-Stat "${script:CYN}📨${script:RST}" (T 'messages') "${script:BLD}$($script:Stat.Messages)${um}${script:RST}"
     Print-Stat "${script:CYN}🧠${script:RST}" (T 'tokens')   "${script:BLD}${tokensFmt} tokens${script:RST}"
-    Print-Stat "${script:CYN}💰${script:RST}" (T 'cost')     "${script:BLD}≈ `$$($script:Stat.EstCost)${script:RST}"
+    Print-Stat "${script:CYN}💰${script:RST}" (T 'cost')     "${script:BLD}≈ ¥$($script:Stat.EstCost)${script:RST}"
     Print-Stat "${script:CYN}🤖${script:RST}" (T 'agents')   "${script:BLD}$($script:Stat.Agents)${ua}${script:RST}"
     Print-Stat "${script:CYN}🔧${script:RST}" (T 'skills')   "${script:BLD}$($script:Stat.Skills)${ua}${script:RST}"
 
@@ -510,7 +506,6 @@ function Render-Wrapped {
     }
     Write-Host "  ${script:YLW}${script:BLD}${quote}${script:RST}"
     Write-Host "  ${script:YLW}$(T 'farewell_power')${script:RST}"
-    Write-Host "  ${script:YLW}$(T 'farewell_thanks')${script:RST}"
 
     Write-Host ""
     Write-Host "  ${script:BLD}${script:MAG}${script:RULER}${script:RST}"
@@ -530,7 +525,7 @@ function Generate-ShareText {
 
 📅 $($script:Stat.Days) days together ($firstDate ~ $today)
 💬 $($script:Stat.Sessions) conversations | 📨 $($script:Stat.Messages) messages
-🧠 $tokensFmt tokens | 💰 ≈ `$$($script:Stat.EstCost)
+🧠 $tokensFmt tokens | 💰 ≈ ¥$($script:Stat.EstCost)
 🤖 $($script:Stat.Agents) agents | 🔧 $($script:Stat.Skills) skills
 "@
         if ($script:Stat.PeakHour) { $text += "`n🌙 Peak: $($script:Stat.PeakHour) ($($script:Stat.PeakLabel))" }
@@ -542,19 +537,13 @@ function Generate-ShareText {
 
 📅 相伴 $($script:Stat.Days) 天（$firstDate ~ $today）
 💬 $($script:Stat.Sessions) 次对话 | 📨 $($script:Stat.Messages) 条消息
-🧠 $tokensFmt tokens | 💰 ≈ `$$($script:Stat.EstCost)
+🧠 $tokensFmt tokens | 💰 ≈ ¥$($script:Stat.EstCost)
 🤖 $($script:Stat.Agents) 个智能体 | 🔧 $($script:Stat.Skills) 个 Skills
 "@
         if ($script:Stat.PeakHour) { $text += "`n🌙 最活跃: $($script:Stat.PeakHour)（$($script:Stat.PeakLabel)）" }
         if ($script:Stat.FavModel) { $text += "`n🏆 最爱: $($script:Stat.FavModel)" }
         $text += "`n`n后会有期，OpenClaw！#ClawfatherWrapped #OpenClaw"
     }
-
-    try {
-        Set-Clipboard -Value $text
-        Ok "📋 $(T 'share_copied')"
-    } catch {}
-    Write-Host "  ${script:GRY}$(T 'share_hint')${script:RST}"
 
     $desktop = [Environment]::GetFolderPath('Desktop')
     if ($desktop -and (Test-Path $desktop)) {

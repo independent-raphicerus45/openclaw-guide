@@ -91,7 +91,7 @@ t() {
   local key="$1"
   if [[ "$OPT_LANG" == "en" ]]; then
     case "$key" in
-      title)            echo "Your OpenClaw Journey  Wrapped" ;;
+      title)            echo "OpenClaw Usage Summary" ;;
       days)             echo "Days Together" ;;
       sessions)         echo "Conversations" ;;
       messages)         echo "Messages" ;;
@@ -105,15 +105,13 @@ t() {
       night_owl)        echo "Night Owl" ;;
       early_bird)       echo "Early Bird" ;;
       steady)           echo "Steady Worker" ;;
-      share_copied)     echo "Share text copied to clipboard!" ;;
-      share_hint)       echo "(You can also screenshot to share)" ;;
       confirm_uninstall) echo "Proceed with uninstall?" ;;
       uninstall_done)   echo "OpenClaw has been uninstalled. Farewell!" ;;
       scanning)         echo "Scanning local data..." ;;
       no_data)          echo "No OpenClaw data found at" ;;
       farewell_quote)   echo "late-night conversations with AI" ;;
       farewell_power)   echo "You've been a power user." ;;
-      farewell_thanks)  echo "Thanks for the journey." ;;
+      farewell_thanks)  echo "" ;;
       will_remove)      echo "The following will be removed:" ;;
       kept)             echo "(kept)" ;;
       skip_dry)         echo "[DRY RUN] No files were deleted." ;;
@@ -122,7 +120,7 @@ t() {
     esac
   else
     case "$key" in
-      title)            echo "你的 OpenClaw 之旅  Wrapped" ;;
+      title)            echo "OpenClaw 使用总结" ;;
       days)             echo "相伴时光" ;;
       sessions)         echo "对话次数" ;;
       messages)         echo "消息总数" ;;
@@ -136,15 +134,13 @@ t() {
       night_owl)        echo "夜猫子" ;;
       early_bird)       echo "早起鸟" ;;
       steady)           echo "稳定输出型" ;;
-      share_copied)     echo "分享文本已复制到剪贴板！" ;;
-      share_hint)       echo "（也可截图分享）" ;;
       confirm_uninstall) echo "确认卸载 OpenClaw？" ;;
       uninstall_done)   echo "OpenClaw 已卸载完成，后会有期！" ;;
       scanning)         echo "正在扫描本地数据..." ;;
       no_data)          echo "未找到 OpenClaw 数据：" ;;
       farewell_quote)   echo "次与 AI 的对话" ;;
       farewell_power)   echo "你是一位超级用户。" ;;
-      farewell_thanks)  echo "感谢这段旅程。" ;;
+      farewell_thanks)  echo "" ;;
       will_remove)      echo "以下内容将被删除：" ;;
       kept)             echo "（已保留）" ;;
       skip_dry)         echo "[预演模式] 未删除任何文件。" ;;
@@ -210,20 +206,6 @@ format_date() {
 
 today_str() { date "+%Y.%m.%d"; }
 now_ts()    { date "+%s"; }
-
-copy_to_clipboard() {
-  local text="$1"
-  if is_macos && has_cmd pbcopy; then
-    printf '%s' "$text" | pbcopy; return 0
-  elif has_cmd xclip; then
-    printf '%s' "$text" | xclip -selection clipboard; return 0
-  elif has_cmd xsel; then
-    printf '%s' "$text" | xsel --clipboard --input; return 0
-  elif has_cmd wl-copy; then
-    printf '%s' "$text" | wl-copy; return 0
-  fi
-  return 1
-}
 
 # Extract first numeric value after a key in a JSON-ish line (no jq needed)
 grep_json_num() {
@@ -483,11 +465,11 @@ estimate_cost() {
     fi
   fi
 
-  # Blended rate: ~$3/M input, ~$15/M output
+  # Blended rate: ~$3/M input, ~$15/M output, converted to CNY (×7)
   if [[ "$STAT_INPUT_TOKENS" -gt 0 || "$STAT_OUTPUT_TOKENS" -gt 0 ]]; then
-    STAT_EST_COST=$(awk "BEGIN { printf \"%.2f\", ($STAT_INPUT_TOKENS * 3 + $STAT_OUTPUT_TOKENS * 15) / 1000000 }")
+    STAT_EST_COST=$(awk "BEGIN { printf \"%.2f\", ($STAT_INPUT_TOKENS * 3 + $STAT_OUTPUT_TOKENS * 15) / 1000000 * 7 }")
   elif [[ "$STAT_TOTAL_TOKENS" -gt 0 ]]; then
-    STAT_EST_COST=$(awk "BEGIN { printf \"%.2f\", $STAT_TOTAL_TOKENS * 8 / 1000000 }")
+    STAT_EST_COST=$(awk "BEGIN { printf \"%.2f\", $STAT_TOTAL_TOKENS * 8 / 1000000 * 7 }")
   fi
 }
 
@@ -555,7 +537,7 @@ render_wrapped() {
   print_stat "${CYN}💬${RST}" "$(t sessions)" "${BLD}${STAT_SESSIONS}${unit_s}${RST}"
   print_stat "${CYN}📨${RST}" "$(t messages)" "${BLD}${STAT_MESSAGES}${unit_m}${RST}"
   print_stat "${CYN}🧠${RST}" "$(t tokens)" "${BLD}${tokens_fmt} tokens${RST}"
-  print_stat "${CYN}💰${RST}" "$(t cost)" "${BLD}≈ \$${STAT_EST_COST}${RST}"
+  print_stat "${CYN}💰${RST}" "$(t cost)" "${BLD}≈ ¥${STAT_EST_COST}${RST}"
   print_stat "${CYN}🤖${RST}" "$(t agents)" "${BLD}${STAT_AGENTS}${unit_a}${RST}"
   print_stat "${CYN}🔧${RST}" "$(t skills)" "${BLD}${STAT_SKILLS}${unit_sk}${RST}"
 
@@ -594,7 +576,6 @@ render_wrapped() {
   fi
   echo "  ${YLW}${BLD}${quote}${RST}"
   echo "  ${YLW}$(t farewell_power)${RST}"
-  echo "  ${YLW}$(t farewell_thanks)${RST}"
 
   echo ""
   echo "  ${BLD}${MAG}${RULER}${RST}"
@@ -617,7 +598,7 @@ generate_share_text() {
 
 📅 ${STAT_DAYS} days together (${first_date} ~ ${today})
 💬 ${STAT_SESSIONS} conversations | 📨 ${STAT_MESSAGES} messages
-🧠 ${tokens_fmt} tokens | 💰 ≈ \$${STAT_EST_COST}
+🧠 ${tokens_fmt} tokens | 💰 ≈ ¥${STAT_EST_COST}
 🤖 ${STAT_AGENTS} agents | 🔧 ${STAT_SKILLS} skills
 EOF
 )"
@@ -630,7 +611,7 @@ EOF
 
 📅 相伴 ${STAT_DAYS} 天（${first_date} ~ ${today}）
 💬 ${STAT_SESSIONS} 次对话 | 📨 ${STAT_MESSAGES} 条消息
-🧠 ${tokens_fmt} tokens | 💰 ≈ \$${STAT_EST_COST}
+🧠 ${tokens_fmt} tokens | 💰 ≈ ¥${STAT_EST_COST}
 🤖 ${STAT_AGENTS} 个智能体 | 🔧 ${STAT_SKILLS} 个 Skills
 EOF
 )"
@@ -638,11 +619,6 @@ EOF
     [[ -n "$STAT_FAV_MODEL" ]] && share_text="${share_text}"$'\n'"🏆 最爱: ${STAT_FAV_MODEL}"
     share_text="${share_text}"$'\n\n'"后会有期，OpenClaw！#ClawfatherWrapped #OpenClaw"
   fi
-
-  if copy_to_clipboard "$share_text"; then
-    ok "📋 $(t share_copied)"
-  fi
-  echo "  ${GRY}$(t share_hint)${RST}"
 
   local desktop_path
   if is_macos; then
