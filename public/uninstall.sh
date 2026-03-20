@@ -158,6 +158,32 @@ has_cmd()  { command -v "$1" >/dev/null 2>&1; }
 is_macos() { [[ "$(uname -s)" == "Darwin" ]]; }
 is_linux() { [[ "$(uname -s)" == "Linux" ]]; }
 
+validate_state_dir() {
+  local dir="$1"
+  local resolved
+  resolved=$(cd "$dir" 2>/dev/null && pwd -P) || resolved="$dir"
+
+  local blocked=("/" "/bin" "/boot" "/dev" "/etc" "/lib" "/lib64" "/opt" "/proc"
+    "/root" "/run" "/sbin" "/srv" "/sys" "/tmp" "/usr" "/var"
+    "$HOME" "$HOME/Desktop" "$HOME/Documents" "$HOME/Downloads" "$HOME/Pictures"
+    "$HOME/Music" "$HOME/Videos" "$HOME/Library")
+
+  for b in "${blocked[@]}"; do
+    [[ -z "$b" ]] && continue
+    if [[ "$resolved" == "$b" ]]; then
+      err "SAFETY: state dir '$dir' (resolved: '$resolved') matches blocked path '$b'. Aborting."
+      exit 1
+    fi
+  done
+
+  local base
+  base=$(basename "$resolved")
+  if [[ "$base" != .openclaw* ]]; then
+    err "SAFETY: state dir basename '$base' does not start with '.openclaw'. Aborting."
+    exit 1
+  fi
+}
+
 format_number() {
   local n="${1:-0}"
   if [[ "$n" -ge 1000000 ]]; then
@@ -240,6 +266,8 @@ collect_data() {
     warn "$(t no_data) $OPENCLAW_STATE"
     return 1
   fi
+
+  validate_state_dir "$OPENCLAW_STATE"
 
   collect_agents
   collect_sessions
@@ -627,8 +655,15 @@ EOF
     desktop_path="${XDG_DESKTOP_DIR:-$HOME/Desktop}"
   fi
 
+  if [[ "$OPT_DRY_RUN" == true ]]; then return; fi
+
   if [[ -d "$desktop_path" ]]; then
     local report_file="${desktop_path}/openclaw-wrapped.txt"
+    if [[ -f "$report_file" ]]; then
+      local ts
+      ts=$(date "+%Y%m%d%H%M%S")
+      report_file="${desktop_path}/openclaw-wrapped-${ts}.txt"
+    fi
     printf '%s\n' "$share_text" > "$report_file"
     ok "📄 ${report_file}"
   fi
@@ -651,8 +686,8 @@ survey_removals() {
     ITEMS_TO_REMOVE+=("state_partial:${OPENCLAW_STATE}/agents (sessions only)")
   fi
 
-  if [[ -d "$HOME/.openclaw/workspace" ]] && [[ "$OPT_KEEP_CONFIG" == false ]]; then
-    ITEMS_TO_REMOVE+=("workspace:$HOME/.openclaw/workspace")
+  if [[ -d "$OPENCLAW_STATE/workspace" ]] && [[ "$OPT_KEEP_CONFIG" == false ]]; then
+    ITEMS_TO_REMOVE+=("workspace:$OPENCLAW_STATE/workspace")
   fi
 
   if is_macos; then
@@ -671,7 +706,14 @@ survey_removals() {
   fi
 
   while IFS= read -r p; do
-    [[ -n "$p" ]] && ITEMS_TO_REMOVE+=("profile:$p")
+    [[ -n "$p" ]] || continue
+    local resolved_p
+    resolved_p=$(cd "$p" 2>/dev/null && pwd -P) || resolved_p="$p"
+    local base_p
+    base_p=$(basename "$resolved_p")
+    if [[ "$base_p" != .openclaw* ]]; then continue; fi
+    if [[ "$resolved_p" == "$HOME" ]]; then continue; fi
+    ITEMS_TO_REMOVE+=("profile:$p")
   done < <(find "$HOME" -maxdepth 1 -name ".openclaw-*" -type d 2>/dev/null || true)
 }
 
@@ -716,7 +758,7 @@ do_uninstall() {
         find "$OPENCLAW_STATE/agents" -name "sessions.json" -delete 2>/dev/null || true
         ok "Cleaned session data"
         ;;
-      workspace)     rm -rf "$HOME/.openclaw/workspace" && ok "Removed workspace" ;;
+      workspace)     rm -rf "$OPENCLAW_STATE/workspace" && ok "Removed workspace" ;;
       launchd)       uninstall_launchd "$desc" ;;
       systemd)       uninstall_systemd ;;
       app)           rm -rf "/Applications/OpenClaw.app" && ok "Removed OpenClaw.app" ;;

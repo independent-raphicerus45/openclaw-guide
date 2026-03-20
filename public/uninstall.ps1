@@ -155,6 +155,39 @@ function T ($key) {
 
 $script:OpenClawState = if ($env:OPENCLAW_STATE_DIR) { $env:OPENCLAW_STATE_DIR } else { Join-Path $env:USERPROFILE '.openclaw' }
 
+function Validate-StateDir ($dir) {
+    $resolved = try { (Resolve-Path $dir -ErrorAction Stop).Path } catch { $dir }
+
+    $blocked = @(
+        [System.IO.Path]::GetPathRoot($resolved)
+        $env:USERPROFILE
+        $env:SystemRoot
+        $env:ProgramFiles
+        ${env:ProgramFiles(x86)}
+        $env:APPDATA
+        $env:LOCALAPPDATA
+        (Join-Path $env:USERPROFILE 'Desktop')
+        (Join-Path $env:USERPROFILE 'Documents')
+        (Join-Path $env:USERPROFILE 'Downloads')
+        (Join-Path $env:USERPROFILE 'Pictures')
+        (Join-Path $env:USERPROFILE 'Music')
+        (Join-Path $env:USERPROFILE 'Videos')
+    ) | Where-Object { $_ }
+
+    foreach ($b in $blocked) {
+        if ($resolved -eq $b) {
+            Err "SAFETY: state dir '$dir' (resolved: '$resolved') matches blocked path '$b'. Aborting."
+            exit 1
+        }
+    }
+
+    $base = Split-Path $resolved -Leaf
+    if ($base -notlike '.openclaw*') {
+        Err "SAFETY: state dir basename '$base' does not start with '.openclaw'. Aborting."
+        exit 1
+    }
+}
+
 function Format-Num ($n) {
     if ($n -ge 1000000) { return '{0:F1}M' -f ($n / 1000000) }
     if ($n -ge 1000)    { return '{0:F1}K' -f ($n / 1000) }
@@ -221,6 +254,8 @@ function Collect-Data {
         Warn "$(T 'no_data') $script:OpenClawState"
         return $false
     }
+
+    Validate-StateDir $script:OpenClawState
 
     Collect-Agents
     Collect-Sessions
@@ -545,9 +580,15 @@ function Generate-ShareText {
         $text += "`n`n后会有期，OpenClaw！#ClawfatherWrapped #OpenClaw"
     }
 
+    if ($DryRun) { return }
+
     $desktop = [Environment]::GetFolderPath('Desktop')
     if ($desktop -and (Test-Path $desktop)) {
         $reportFile = Join-Path $desktop 'openclaw-wrapped.txt'
+        if (Test-Path $reportFile) {
+            $ts = (Get-Date).ToString('yyyyMMddHHmmss')
+            $reportFile = Join-Path $desktop "openclaw-wrapped-$ts.txt"
+        }
         $text | Out-File -FilePath $reportFile -Encoding UTF8 -Force
         Ok "📄 $reportFile"
     }
@@ -573,7 +614,7 @@ function Survey-Removals {
         }
     }
 
-    $workspace = Join-Path $env:USERPROFILE '.openclaw\workspace'
+    $workspace = Join-Path $script:OpenClawState 'workspace'
     if ((Test-Path $workspace) -and -not $KeepConfig) {
         $script:ItemsToRemove += @{ Kind = 'workspace'; Desc = $workspace }
     }
@@ -593,7 +634,11 @@ function Survey-Removals {
 
     # Profile directories
     Get-ChildItem $env:USERPROFILE -Directory -Filter '.openclaw-*' -ErrorAction SilentlyContinue | ForEach-Object {
-        $script:ItemsToRemove += @{ Kind = 'profile'; Desc = $_.FullName }
+        $resolved = try { (Resolve-Path $_.FullName -ErrorAction Stop).Path } catch { $_.FullName }
+        $base = Split-Path $resolved -Leaf
+        if ($base -notlike '.openclaw*') { return }
+        if ($resolved -eq $env:USERPROFILE) { return }
+        $script:ItemsToRemove += @{ Kind = 'profile'; Desc = $resolved }
     }
 }
 
