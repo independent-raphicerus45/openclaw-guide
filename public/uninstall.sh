@@ -112,6 +112,7 @@ t() {
       farewell_quote)   echo "late-night conversations with AI" ;;
       farewell_power)   echo "You've been a power user." ;;
       farewell_thanks)  echo "" ;;
+      disclaimer)       echo "* Data is approximate and for reference only." ;;
       will_remove)      echo "The following will be removed:" ;;
       kept)             echo "(kept)" ;;
       skip_dry)         echo "[DRY RUN] No files were deleted." ;;
@@ -122,7 +123,7 @@ t() {
     case "$key" in
       title)            echo "OpenClaw 使用总结" ;;
       days)             echo "相伴时光" ;;
-      sessions)         echo "对话次数" ;;
+      sessions)         echo "会话总数" ;;
       messages)         echo "消息总数" ;;
       tokens)           echo "Token 消耗" ;;
       cost)             echo "估算费用" ;;
@@ -141,6 +142,7 @@ t() {
       farewell_quote)   echo "次与 AI 的对话" ;;
       farewell_power)   echo "你是一位超级用户。" ;;
       farewell_thanks)  echo "" ;;
+      disclaimer)       echo "* 以上数据仅供参考娱乐，实际请以官方数据为准。" ;;
       will_remove)      echo "以下内容将被删除：" ;;
       kept)             echo "（已保留）" ;;
       skip_dry)         echo "[预演模式] 未删除任何文件。" ;;
@@ -296,14 +298,13 @@ collect_agents() {
 }
 
 collect_sessions() {
-  local count=0 earliest=0 latest=0
+  local earliest=0 latest=0
 
+  STAT_SESSIONS=$(find "$OPENCLAW_STATE/agents" -path "*/sessions/*.jsonl*" -type f 2>/dev/null | wc -l | tr -d ' ')
+
+  # Timestamps from sessions.json (updatedAt tracks last activity per route)
   while IFS= read -r sf; do
     if has_cmd jq; then
-      local keys
-      keys=$(jq 'keys | length' "$sf" 2>/dev/null || echo 0)
-      count=$((count + keys))
-
       local raw_earliest raw_latest
       raw_earliest=$(jq -r '[.[].updatedAt // 0] | map(select(. != 0)) | sort | first // 0' "$sf" 2>/dev/null || echo 0)
       raw_latest=$(jq -r '[.[].updatedAt // 0] | map(select(. != 0)) | sort | last // 0' "$sf" 2>/dev/null || echo 0)
@@ -316,19 +317,13 @@ collect_sessions() {
         earliest=$e_s
       fi
       [[ "$l_s" -gt "$latest" ]] && latest=$l_s
-    else
-      local c
-      c=$(grep -c '"sessionId"' "$sf" 2>/dev/null || echo 0)
-      count=$((count + c))
     fi
   done < <(find "$OPENCLAW_STATE/agents" -path "*/sessions/sessions.json" 2>/dev/null)
 
-  STAT_SESSIONS=$count
   STAT_FIRST_TS=$earliest
   STAT_LAST_TS=$latest
 
   # Also check JSONL headers for the earliest session start
-  local jsonl_first=0
   while IFS= read -r jsonl; do
     local raw_ts
     if has_cmd jq; then
@@ -338,36 +333,56 @@ collect_sessions() {
     fi
     local s
     s=$(to_epoch_s "$raw_ts")
-    if [[ "$s" -gt 0 ]] && { [[ "$jsonl_first" -eq 0 ]] || [[ "$s" -lt "$jsonl_first" ]]; }; then
-      jsonl_first=$s
+    if [[ "$s" -gt 0 ]] && { [[ "$STAT_FIRST_TS" -eq 0 ]] || [[ "$s" -lt "$STAT_FIRST_TS" ]]; }; then
+      STAT_FIRST_TS=$s
     fi
-  done < <(find "$OPENCLAW_STATE/agents" -name "*.jsonl" -type f 2>/dev/null | head -50)
-
-  if [[ "$jsonl_first" -gt 0 ]] && { [[ "$STAT_FIRST_TS" -eq 0 ]] || [[ "$jsonl_first" -lt "$STAT_FIRST_TS" ]]; }; then
-    STAT_FIRST_TS=$jsonl_first
-  fi
+    if [[ "$s" -gt "$STAT_LAST_TS" ]]; then
+      STAT_LAST_TS=$s
+    fi
+  done < <(find "$OPENCLAW_STATE/agents" -path "*/sessions/*.jsonl*" -type f 2>/dev/null | head -50)
 }
 
 collect_tokens_and_messages() {
   local total_input=0 total_output=0 total_all=0 msg_count=0
+  local cli_tokens=false
 
-  while IFS= read -r sf; do
-    if has_cmd jq; then
-      local inp out tot
-      inp=$(jq '[.[].inputTokens // 0] | add // 0' "$sf" 2>/dev/null || echo 0)
-      out=$(jq '[.[].outputTokens // 0] | add // 0' "$sf" 2>/dev/null || echo 0)
-      tot=$(jq '[.[].totalTokens // 0] | add // 0' "$sf" 2>/dev/null || echo 0)
-      total_input=$((total_input + inp))
-      total_output=$((total_output + out))
-      total_all=$((total_all + tot))
+  # Prefer CLI for token totals — sessions.json counters reset on each session reset
+  if has_cmd openclaw && has_cmd jq; then
+    local usage_out
+    usage_out=$(openclaw status --usage --json 2>/dev/null || echo "")
+    if [[ -n "$usage_out" ]]; then
+      local cli_in cli_out cli_tot
+      cli_in=$(echo "$usage_out" | jq -r '.inputTokens // .totalInputTokens // 0' 2>/dev/null || echo 0)
+      cli_out=$(echo "$usage_out" | jq -r '.outputTokens // .totalOutputTokens // 0' 2>/dev/null || echo 0)
+      cli_tot=$(echo "$usage_out" | jq -r '.totalTokens // 0' 2>/dev/null || echo 0)
+      if [[ "$cli_tot" -gt 0 || "$cli_in" -gt 0 ]]; then
+        total_input=$cli_in; total_output=$cli_out; total_all=$cli_tot
+        cli_tokens=true
+      fi
     fi
-  done < <(find "$OPENCLAW_STATE/agents" -path "*/sessions/sessions.json" 2>/dev/null)
+  fi
+
+  # Fallback: sum from sessions.json (only reflects current active sessions)
+  if [[ "$cli_tokens" == false ]]; then
+    while IFS= read -r sf; do
+      if has_cmd jq; then
+        local inp out tot
+        inp=$(jq '[.[].inputTokens // 0] | add // 0' "$sf" 2>/dev/null || echo 0)
+        out=$(jq '[.[].outputTokens // 0] | add // 0' "$sf" 2>/dev/null || echo 0)
+        tot=$(jq '[.[].totalTokens // 0] | add // 0' "$sf" 2>/dev/null || echo 0)
+        total_input=$((total_input + inp))
+        total_output=$((total_output + out))
+        total_all=$((total_all + tot))
+      fi
+    done < <(find "$OPENCLAW_STATE/agents" -path "*/sessions/sessions.json" 2>/dev/null)
+  fi
 
   while IFS= read -r jsonl; do
     local c
     c=$(grep -c '"type"[[:space:]]*:[[:space:]]*"message"' "$jsonl" 2>/dev/null || echo 0)
     msg_count=$((msg_count + c))
-  done < <(find "$OPENCLAW_STATE/agents" -name "*.jsonl" -type f 2>/dev/null)
+  done < <(find "$OPENCLAW_STATE/agents" -path "*/sessions/*.jsonl*" -type f 2>/dev/null \
+    | sort -r | head -200)
 
   STAT_INPUT_TOKENS=$total_input
   STAT_OUTPUT_TOKENS=$total_output
@@ -455,7 +470,7 @@ compute_peak_hours() {
           tr -d '"' | tr -d ' '
       fi
     )
-  done < <(find "$OPENCLAW_STATE/agents" -name "*.jsonl" -type f 2>/dev/null | head -30)
+  done < <(find "$OPENCLAW_STATE/agents" -path "*/sessions/*.jsonl*" -type f 2>/dev/null | head -30)
 
   local max_count=0 max_hour=0
   for i in {0..23}; do
@@ -588,7 +603,7 @@ render_wrapped() {
     echo ""
     echo "  ${GRY}── $(t activity) ──${RST}"
     echo "  ${GRY}$(render_sparkline)${RST}"
-    echo "  ${DIM}0h        6h        12h       18h     23h${RST}"
+    echo "  ${DIM}0     6     12    18  23${RST}"
   fi
 
   # ── Farewell ──
@@ -600,10 +615,12 @@ render_wrapped() {
   if [[ "$OPT_LANG" == "en" ]]; then
     quote="  \"Your ${STAT_SESSIONS} $(t farewell_quote).\""
   else
-    quote="  \"你的 ${STAT_SESSIONS} $(t farewell_quote)。\""
+    quote="  \"你与 AI 的 ${STAT_SESSIONS} 次会话。\""
   fi
   echo "  ${YLW}${BLD}${quote}${RST}"
   echo "  ${YLW}$(t farewell_power)${RST}"
+  echo ""
+  echo "  ${DIM}$(t disclaimer)${RST}"
 
   echo ""
   echo "  ${BLD}${MAG}${RULER}${RST}"

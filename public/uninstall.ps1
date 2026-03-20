@@ -95,7 +95,7 @@ function T ($key) {
     $zh = @{
         title            = 'OpenClaw 使用总结'
         days             = '相伴时光'
-        sessions         = '对话次数'
+        sessions         = '会话总数'
         messages         = '消息总数'
         tokens           = 'Token 消耗'
         cost             = '估算费用'
@@ -114,6 +114,7 @@ function T ($key) {
         farewell_quote   = '次与 AI 的对话'
         farewell_power   = '你是一位超级用户。'
         farewell_thanks  = ''
+        disclaimer       = '* 以上数据仅供参考娱乐，实际请以官方数据为准。'
         will_remove      = '以下内容将被删除：'
         kept             = '（已保留）'
         skip_dry         = '[预演模式] 未删除任何文件。'
@@ -141,6 +142,7 @@ function T ($key) {
         farewell_quote   = 'late-night conversations with AI'
         farewell_power   = "You've been a power user."
         farewell_thanks  = ''
+        disclaimer       = '* Data is approximate and for reference only.'
         will_remove      = 'The following will be removed:'
         kept             = '(kept)'
         skip_dry         = '[DRY RUN] No files were deleted.'
@@ -285,17 +287,18 @@ function Collect-Sessions {
     $agentsDir = Join-Path $script:OpenClawState 'agents'
     if (-not (Test-Path $agentsDir)) { return }
 
-    $count = 0; $earliest = 0; $latest = 0
+    $earliest = 0; $latest = 0
 
+    $jsonlFiles = Get-ChildItem $agentsDir -Recurse -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.DirectoryName -like '*sessions*' -and $_.Name -like '*.jsonl*' }
+    $script:Stat.Sessions = @($jsonlFiles).Count
+
+    # Timestamps from sessions.json (updatedAt tracks last activity per route)
     $sessionFiles = Get-ChildItem $agentsDir -Recurse -Filter 'sessions.json' -ErrorAction SilentlyContinue
     foreach ($sf in $sessionFiles) {
         $json = Read-JsonFile $sf.FullName
         if (-not $json) { continue }
-
-        $props = $json.PSObject.Properties
-        $count += $props.Count
-
-        foreach ($p in $props) {
+        foreach ($p in $json.PSObject.Properties) {
             $ua = $p.Value.updatedAt
             if ($ua) {
                 $s = To-EpochS $ua
@@ -305,9 +308,8 @@ function Collect-Sessions {
         }
     }
 
-    # Check JSONL headers
-    $jsonlFiles = Get-ChildItem $agentsDir -Recurse -Filter '*.jsonl' -ErrorAction SilentlyContinue | Select-Object -First 50
-    foreach ($jf in $jsonlFiles) {
+    # Also check JSONL headers for earliest/latest timestamps
+    foreach ($jf in ($jsonlFiles | Select-Object -First 50)) {
         $firstLine = Get-Content $jf.FullName -TotalCount 1 -ErrorAction SilentlyContinue
         if (-not $firstLine) { continue }
         try {
@@ -315,13 +317,13 @@ function Collect-Sessions {
             if ($header.timestamp) {
                 $s = To-EpochS $header.timestamp
                 if ($s -gt 0 -and ($earliest -eq 0 -or $s -lt $earliest)) { $earliest = $s }
+                if ($s -gt $latest) { $latest = $s }
             }
         } catch {}
     }
 
-    $script:Stat.Sessions = $count
-    $script:Stat.FirstTS  = $earliest
-    $script:Stat.LastTS   = $latest
+    $script:Stat.FirstTS = $earliest
+    $script:Stat.LastTS  = $latest
 }
 
 function Collect-TokensAndMessages {
@@ -329,23 +331,46 @@ function Collect-TokensAndMessages {
     if (-not (Test-Path $agentsDir)) { return }
 
     $totalIn = 0; $totalOut = 0; $totalAll = 0; $msgCount = 0
+    $cliTokens = $false
 
-    $sessionFiles = Get-ChildItem $agentsDir -Recurse -Filter 'sessions.json' -ErrorAction SilentlyContinue
-    foreach ($sf in $sessionFiles) {
-        $json = Read-JsonFile $sf.FullName
-        if (-not $json) { continue }
-        foreach ($p in $json.PSObject.Properties) {
-            $totalIn  += [int]($p.Value.inputTokens  -as [int])
-            $totalOut += [int]($p.Value.outputTokens  -as [int])
-            $totalAll += [int]($p.Value.totalTokens   -as [int])
+    # Prefer CLI for token totals — sessions.json counters reset on each session reset
+    if (Has-Cmd 'openclaw') {
+        try {
+            $usageOut = & openclaw status --usage --json 2>$null | ConvertFrom-Json
+            if ($usageOut) {
+                $cIn  = if ($usageOut.inputTokens) { $usageOut.inputTokens } elseif ($usageOut.totalInputTokens) { $usageOut.totalInputTokens } else { 0 }
+                $cOut = if ($usageOut.outputTokens) { $usageOut.outputTokens } elseif ($usageOut.totalOutputTokens) { $usageOut.totalOutputTokens } else { 0 }
+                $cTot = if ($usageOut.totalTokens) { $usageOut.totalTokens } else { 0 }
+                if ($cTot -gt 0 -or $cIn -gt 0) {
+                    $totalIn = [long]$cIn; $totalOut = [long]$cOut; $totalAll = [long]$cTot
+                    $cliTokens = $true
+                }
+            }
+        } catch {}
+    }
+
+    # Fallback: sum from sessions.json (only reflects current active sessions)
+    if (-not $cliTokens) {
+        $sessionFiles = Get-ChildItem $agentsDir -Recurse -Filter 'sessions.json' -ErrorAction SilentlyContinue
+        foreach ($sf in $sessionFiles) {
+            $json = Read-JsonFile $sf.FullName
+            if (-not $json) { continue }
+            foreach ($p in $json.PSObject.Properties) {
+                $totalIn  += [long]($p.Value.inputTokens  -as [long])
+                $totalOut += [long]($p.Value.outputTokens  -as [long])
+                $totalAll += [long]($p.Value.totalTokens   -as [long])
+            }
         }
     }
 
-    $jsonlFiles = Get-ChildItem $agentsDir -Recurse -Filter '*.jsonl' -ErrorAction SilentlyContinue
+    $jsonlFiles = Get-ChildItem $agentsDir -Recurse -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.DirectoryName -like '*sessions*' -and $_.Name -like '*.jsonl*' } |
+        Sort-Object LastWriteTime -Descending |
+        Select-Object -First 200
     foreach ($jf in $jsonlFiles) {
-        $content = Get-Content $jf.FullName -ErrorAction SilentlyContinue
-        if ($content) {
-            $msgCount += @($content | Where-Object { $_ -match '"type"\s*:\s*"message"' }).Count
+        $lines = Get-Content $jf.FullName -TotalCount 5000 -ErrorAction SilentlyContinue
+        if ($lines) {
+            $msgCount += @($lines | Where-Object { $_ -match '"type"\s*:\s*"message"' }).Count
         }
     }
 
@@ -410,7 +435,9 @@ function Compute-PeakHours {
     $agentsDir = Join-Path $script:OpenClawState 'agents'
     if (-not (Test-Path $agentsDir)) { return }
 
-    $jsonlFiles = Get-ChildItem $agentsDir -Recurse -Filter '*.jsonl' -ErrorAction SilentlyContinue | Select-Object -First 30
+    $jsonlFiles = Get-ChildItem $agentsDir -Recurse -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.DirectoryName -like '*sessions*' -and $_.Name -like '*.jsonl*' } |
+        Select-Object -First 30
     foreach ($jf in $jsonlFiles) {
         $lines = Get-Content $jf.FullName -TotalCount 200 -ErrorAction SilentlyContinue
         foreach ($line in $lines) {
@@ -428,9 +455,11 @@ function Compute-PeakHours {
     }
 
     $script:Stat.HourCounts = $hours
-    $maxCount = ($hours | Measure-Object -Maximum).Maximum
+    $maxCount = 0; $maxHour = 0
+    for ($i = 0; $i -lt 24; $i++) {
+        if ($hours[$i] -gt $maxCount) { $maxCount = $hours[$i]; $maxHour = $i }
+    }
     if ($maxCount -gt 0) {
-        $maxHour = [Array]::IndexOf($hours, $maxCount)
         $endHour = ($maxHour + 3) % 24
         $script:Stat.PeakHour = '{0:D2}:00 ~ {1:D2}:00' -f $maxHour, $endHour
 
@@ -464,8 +493,28 @@ function Estimate-Cost {
 $script:RULER      = '═' * 48
 $script:THIN_RULER = '─' * 48
 
+function Get-DisplayWidth ($text) {
+    $w = 0
+    foreach ($c in $text.ToCharArray()) {
+        $cp = [int]$c
+        if (($cp -ge 0x1100 -and $cp -le 0x115F) -or
+            ($cp -ge 0x2E80 -and $cp -le 0x9FFF) -or
+            ($cp -ge 0xAC00 -and $cp -le 0xD7AF) -or
+            ($cp -ge 0xF900 -and $cp -le 0xFAFF) -or
+            ($cp -ge 0xFE10 -and $cp -le 0xFE6F) -or
+            ($cp -ge 0xFF01 -and $cp -le 0xFF60) -or
+            ($cp -ge 0xFFE0 -and $cp -le 0xFFE6)) {
+            $w += 2
+        } else {
+            $w += 1
+        }
+    }
+    return $w
+}
+
 function Print-Stat ($emoji, $label, $value) {
-    $pad = [math]::Max(0, 14 - $label.Length)
+    $dw = Get-DisplayWidth $label
+    $pad = [math]::Max(0, 14 - $dw)
     Write-Host ("  {0}  {1}{2}  {3}" -f $emoji, $label, (' ' * $pad), $value)
 }
 
@@ -526,7 +575,7 @@ function Render-Wrapped {
         Write-Host ""
         Write-Host "  ${script:GRY}── $(T 'activity') ──${script:RST}"
         Write-Host "  ${script:GRY}$(Render-Sparkline)${script:RST}"
-        Write-Host "  ${script:DIM}0h        6h        12h       18h     23h${script:RST}"
+        Write-Host "  ${script:DIM}0     6     12    18  23${script:RST}"
     }
 
     # Farewell
@@ -537,10 +586,12 @@ function Render-Wrapped {
     if ($Lang -eq 'en') {
         $quote = "  `"Your $($script:Stat.Sessions) $(T 'farewell_quote').`""
     } else {
-        $quote = "  `"你的 $($script:Stat.Sessions) $(T 'farewell_quote')。`""
+        $quote = "  `"你与 AI 的 $($script:Stat.Sessions) 次会话。`""
     }
     Write-Host "  ${script:YLW}${script:BLD}${quote}${script:RST}"
     Write-Host "  ${script:YLW}$(T 'farewell_power')${script:RST}"
+    Write-Host ""
+    Write-Host "  ${script:DIM}$(T 'disclaimer')${script:RST}"
 
     Write-Host ""
     Write-Host "  ${script:BLD}${script:MAG}${script:RULER}${script:RST}"
