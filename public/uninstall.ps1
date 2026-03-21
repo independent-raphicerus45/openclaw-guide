@@ -773,13 +773,67 @@ function Uninstall-Cli {
     if (Has-Cmd 'pnpm') { try { & pnpm remove -g openclaw 2>$null | Out-Null } catch {} }
     if (Has-Cmd 'bun')  { try { & bun remove -g openclaw 2>$null | Out-Null } catch {} }
 
+    Remove-CliShims
     Ok "CLI uninstalled"
+}
+
+function Remove-CliShims {
+    $shimNames = @('openclaw', 'openclaw.cmd', 'openclaw.ps1')
+    $binDirs = @()
+
+    # pnpm global bin
+    if ($env:PNPM_HOME -and (Test-Path $env:PNPM_HOME)) {
+        $binDirs += $env:PNPM_HOME
+    }
+    $pnpmDefault = Join-Path $env:LOCALAPPDATA 'pnpm'
+    if ((Test-Path $pnpmDefault) -and ($binDirs -notcontains $pnpmDefault)) {
+        $binDirs += $pnpmDefault
+    }
+
+    # npm global bin
+    if (Has-Cmd 'npm') {
+        try {
+            $npmPrefix = (& npm prefix -g 2>$null).Trim()
+            if ($npmPrefix -and (Test-Path $npmPrefix)) { $binDirs += $npmPrefix }
+        } catch {}
+    }
+
+    # bun global bin
+    if ($env:BUN_INSTALL) {
+        $bunBin = Join-Path $env:BUN_INSTALL 'bin'
+        if (Test-Path $bunBin) { $binDirs += $bunBin }
+    }
+
+    foreach ($dir in $binDirs) {
+        foreach ($name in $shimNames) {
+            $shimPath = Join-Path $dir $name
+            if (Test-Path $shimPath) {
+                Remove-Item $shimPath -Force -ErrorAction SilentlyContinue
+            }
+        }
+    }
 }
 
 function Verify-Uninstall {
     Write-Host ""
     $clean = $true
 
+    # Force PowerShell to re-scan PATH (clear cached command lookups)
+    Get-Command -Name openclaw -ErrorAction SilentlyContinue | Out-Null
+    Remove-Item alias:openclaw -ErrorAction SilentlyContinue
+    $refreshed = Get-Command openclaw -ErrorAction SilentlyContinue
+    if ($refreshed) {
+        $residualPath = $refreshed.Source
+        Remove-Item $residualPath -Force -ErrorAction SilentlyContinue
+        $dir = Split-Path $residualPath -Parent
+        $shimNames = @('openclaw', 'openclaw.cmd', 'openclaw.ps1')
+        foreach ($name in $shimNames) {
+            $p = Join-Path $dir $name
+            if (Test-Path $p) { Remove-Item $p -Force -ErrorAction SilentlyContinue }
+        }
+    }
+
+    # Re-check after cleanup
     if (Has-Cmd 'openclaw') {
         Warn "openclaw still on PATH: $((Get-Command openclaw).Source)"
         $clean = $false
